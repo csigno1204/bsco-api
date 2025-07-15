@@ -1,32 +1,41 @@
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
+
+app = FastAPI()
+
+# CORS – pour tests on autorise tout, en prod remplace "*" par ton domaine Softr
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# URL Bexio (singulier "contact" selon la doc)
+BEXIO_CONTACTS_URL = "https://api.bexio.com/2.0/contact"
 
 @app.get("/contacts")
 async def get_contacts(
-    softr_jwt: str    = Header(None, alias="Authorization"),
-    bexio_jwt: str   = Header(None, alias="X-Bexio-Token"),
-    query_token: str = Query(None, alias="token")
+    token: str = Query(..., description="Votre access-token Bexio")
 ):
-    # 1️⃣ Récupérez le JWT Softr (toujours en header Authorization)
-    if not softr_jwt or not softr_jwt.startswith("Bearer "):
-        raise HTTPException(401, "JWT Softr manquant ou mal formé")
-    # 2️⃣ Récupérez le token Bexio, depuis le header X‑Bexio‑Token **ou** depuis ?token=
-    # on préfère le header, sinon fallback sur query param
-    tb = None
-    if bexio_jwt and bexio_jwt.startswith("Bearer "):
-        tb = bexio_jwt
-    elif query_token:
-        tb = "Bearer " + query_token
-    else:
-        raise HTTPException(401, "Token Bexio manquant")
-    # 3️⃣ Votre appel à Bexio :
+    """
+    Appelle l'endpoint Bexio /contact en GET.
+    Exige le query-param `token` qui contient votre Bearer token Bexio.
+    """
+
+    headers = {
+        "Accept": "application/json",
+        # on injecte directement le token passé en paramètre
+        "Authorization": f"Bearer {token}"
+    }
+
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{BEXIO_BASE_URL}/contact",
-            headers={
-              "Accept": "application/json",
-              "Authorization": tb
-            }
-        )
+        resp = await client.get(BEXIO_CONTACTS_URL, headers=headers)
+
     if resp.status_code != 200:
-        raise HTTPException(resp.status_code, f"Bexio API error: {resp.text}")
+        # on remonte le code et le message d'erreur Bexio
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
     return resp.json()
