@@ -1,40 +1,43 @@
 import os
-from fastapi import FastAPI, HTTPException, Cookie
+from fastapi import FastAPI, Header, HTTPException
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# CORS → on autorise votre domaine Softr
+# CORS → autorise votre sous‑domaine preview.softr.app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://*.softr.app"],
+    allow_origins=[
+      "https://*.softr.app",
+      "https://*.preview.softr.app"
+    ],
     allow_credentials=True,
     allow_methods=["GET"],
     allow_headers=["*"],
 )
 
-# Variables d’environnement
+# … vos mêmes variables d'env …
 SOFTR_APP_ID   = os.getenv("SOFTR_APP_ID")
 SOFTR_API_KEY  = os.getenv("SOFTR_API_KEY")
 SOFTR_DB_ID    = os.getenv("SOFTR_DB_ID")
 SOFTR_TABLE_ID = os.getenv("SOFTR_TABLE_ID")
-BEXIO_BASE_URL = os.getenv("BEXIO_BASE_URL")  # e.g. https://api.bexio.com/2.0
+BEXIO_BASE_URL = os.getenv("BEXIO_BASE_URL")  # ex: https://api.bexio.com/2.0
 
-# Vérification rapide
 for v in ("SOFTR_APP_ID","SOFTR_API_KEY","SOFTR_DB_ID","SOFTR_TABLE_ID","BEXIO_BASE_URL"):
     if not globals()[v]:
         raise RuntimeError(f"Il faut définir la variable {v}")
 
 @app.get("/contacts")
 async def get_contacts(
-    jwt_token: str = Cookie(None, alias="jwtToken")  # JWT Softr stocké en cookie
+    authorization: str = Header(None, description="Bearer <JWT Softr>")
 ):
-    # 1️⃣ JWT Softr must exist
-    if not jwt_token:
-        raise HTTPException(401, "JWT Softr manquant dans le cookie")
+    # 1️⃣ On récupère le JWT Softr depuis Authorization
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Header Authorization manquant ou mal formé")
+    jwt_token = authorization.split(" ", 1)[1]
 
-    # 2️⃣ Récupérer l’email du user via /users/me
+    # 2️⃣ on va chercher l’email du user -> Softr /users/me
     me_url = f"https://api.softr.io/v1/applications/{SOFTR_APP_ID}/users/me"
     headers_softr = {
         "Authorization": f"Bearer {jwt_token}",
@@ -49,14 +52,14 @@ async def get_contacts(
     if not email:
         raise HTTPException(400, "Impossible d’extraire l’email du user")
 
-    # 3️⃣ Chercher le record Softr (table Users) pour trouver le token Bexio
+    # 3️⃣ on interroge la table “Users” pour récupérer le field “Token”
     rec_url = (
-        f"https://api.softr.io/v1/applications/{SOFTR_APP_ID}"
-        f"/databases/{SOFTR_DB_ID}/tables/{SOFTR_TABLE_ID}/records"
+      f"https://api.softr.io/v1/applications/{SOFTR_APP_ID}"
+      f"/databases/{SOFTR_DB_ID}/tables/{SOFTR_TABLE_ID}/records"
     )
     filter_body = {
-        "filterCriteria": [{"fieldName":"Email","operator":"=","value": email}],
-        "pagingOption": {"count":1, "offset":0}
+      "filterCriteria": [{"fieldName":"Email","operator":"=","value": email}],
+      "pagingOption": {"count":1, "offset":0}
     }
     async with httpx.AsyncClient() as client:
         r2 = await client.post(
@@ -72,12 +75,12 @@ async def get_contacts(
         raise HTTPException(r2.status_code, f"Softr Data API error: {r2.text}")
     records = r2.json().get("records", [])
     if not records:
-        raise HTTPException(404, "Aucun record Softr pour cet email")
+        raise HTTPException(404, "Aucun user record Softr trouvé")
     bexio_token = records[0].get("Token")
     if not bexio_token:
-        raise HTTPException(404, "Aucun token Bexio stocké pour cet user")
+        raise HTTPException(404, "Aucun token Bexio pour cet user")
 
-    # 4️⃣ Appel Bexio avec Authorization: Bearer <bexio_token>
+    # 4️⃣ On appelle Bexio avec le token stocké
     async with httpx.AsyncClient() as client:
         r3 = await client.get(
             f"{BEXIO_BASE_URL}/contact",
@@ -89,5 +92,5 @@ async def get_contacts(
     if r3.status_code != 200:
         raise HTTPException(r3.status_code, f"Bexio API error: {r3.text}")
 
-    # 5️⃣ Tout est OK → on renvoie la réponse Bexio directement
+    # 5️⃣ On renvoie le JSON Bexio
     return r3.json()
