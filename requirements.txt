@@ -1,3 +1,5 @@
-fastapi
-uvicorn
-httpx
+fastapi           # Framework ASGI rapide
+uvicorn[standard] # Serveur ASGI pour exécuter l’app
+httpx             # Client HTTP asynchrone pour appeler Bexio
+python-dotenv     # Charger les vars d’env depuis .env
+pydantic-settings # Settings via Pydantic v2
